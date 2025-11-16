@@ -26,8 +26,7 @@ defmodule Lora.MixProject do
   # Run "mix help deps" to learn about dependencies.
   defp deps do
     [
-      {:circuits_uart, "~> 1.5"},
-      {:phoenix_pubsub, "~> 2.1"}
+      {:circuits_uart, "~> 1.5"}
       # {:sibling_app_in_umbrella, in_umbrella: true}
     ]
   end

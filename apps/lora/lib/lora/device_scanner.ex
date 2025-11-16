@@ -35,10 +35,22 @@ defmodule Lora.DeviceScanner do
 
     found_port_names = get_found_port_names()
 
-    Logger.debug("Found ports from mock: #{inspect(found_port_names)}")
+    Logger.debug("Found ports: #{inspect(found_port_names)}")
 
-    new_port_names = found_port_names -- running_ports
+    new_port_names = Enum.reject(found_port_names, &(&1 in running_ports))
     Logger.debug("New ports to be started: #{inspect(new_port_names)}")
+
+    ports_to_remove = running_ports -- found_port_names
+
+    for port <- ports_to_remove do
+      Logger.info("Device #{port} disconnected, stopping worker.")
+
+      case Supervisor.terminate_child(Lora.Supervisor, port) do
+        :ok -> Logger.debug("Child #{port} deleted.")
+        {:error, :running} -> Logger.debug("Child #{port} was already terminating.")
+        other -> Logger.error("Could not delete child #{port}: #{inspect(other)}")
+      end
+    end
 
     for port <- new_port_names do
       Logger.info("Found new device: #{port}")

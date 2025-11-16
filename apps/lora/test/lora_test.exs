@@ -2,23 +2,10 @@ defmodule LoraTest.MockLora do
   alias Circuits.UART
   use GenServer
   require Logger
+  import LoraTest.Helpers
 
   def start_link(opts) do
     GenServer.start_link(__MODULE__, opts)
-  end
-
-  defp wait_for_files(files, timeout_ms \\ 1000) do
-    step_interval = 50
-    max_attempts = div(timeout_ms, step_interval)
-
-    Enum.reduce_while(1..max_attempts, nil, fn _, _ ->
-      if Enum.all?(files, &File.exists?/1) do
-        {:halt, :ok}
-      else
-        Process.sleep(step_interval)
-        {:cont, nil}
-      end
-    end)
   end
 
   @impl GenServer
@@ -101,6 +88,27 @@ defmodule LoraTest.MockLora do
   end
 end
 
+defmodule LoraTest.MockUART do
+  @moduledoc """
+  A GenServer mock for Circuits.UART that allows us to control the output of `enumerate/0`.
+  """
+  use GenServer
+
+  def start_link(_), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
+
+  def init(:ok), do: {:ok, %{}}
+
+  def handle_call(:enumerate, _from, state), do: {:reply, state, state}
+
+  def handle_call({:set_ports, ports}, _from, _state) do
+    {:reply, :ok, ports}
+  end
+
+  # Public API
+  def enumerate, do: GenServer.call(__MODULE__, :enumerate)
+  def set_ports(ports), do: GenServer.call(__MODULE__, {:set_ports, ports})
+end
+
 defmodule LoraTest.WorkerTest do
   use ExUnit.Case, async: false
 
@@ -173,116 +181,55 @@ defmodule LoraTest.WorkerTest do
 end
 
 defmodule LoraTest.DeviceScannerLogicTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
   @moduletag :device_scanner_logic
 
-  defmodule MockUART do
-    def enumerate do
-      %{ 
-        "ttyS0" => %{description: "real port"},
-        "ttyFAKE" => %{description: "a fake serial port"},
-        "ttyEMPTY" => %{}
-      }
-    end
+  setup do
+    start_supervised!(LoraTest.MockUART)
+    :ok
   end
 
   test "get_found_port_names/0 correctly filters and maps enumerated ports" do
-    # Configure the scanner to use the mock UART for this test
-    Application.put_env(:lora, :uart_module, MockUART)
+    Application.put_env(:lora, :uart_module, LoraTest.MockUART)
+
+    LoraTest.MockUART.set_ports(%{
+      "ttyS0" => %{description: "real port"},
+      "ttyFAKE" => %{description: "a fake serial port"},
+      "ttyEMPTY" => %{}
+    })
 
     found_ports = Lora.DeviceScanner.get_found_port_names()
     assert found_ports -- ["ttyS0", "ttyFAKE"] == []
     assert "ttyEMPTY" not in found_ports
 
-    # Clean up the application environment
     Application.delete_env(:lora, :uart_module)
   end
 end
 
 defmodule LoraTest.DeviceScannerTest do
   use ExUnit.Case, async: false
+  import LoraTest.Helpers
   @moduletag :device_scanner_integration
 
-  # This is a new, separate mock for this test module.
-  defmodule MockUART do
-    use GenServer
-
-    def start_link(_), do: GenServer.start_link(__MODULE__, :ok, name: __MODULE__)
-
-    def init(:ok), do: {:ok, %{}}
-
-    def handle_call(:enumerate, _from, state), do: {:reply, state, state}
-
-    def handle_call({:set_ports, ports}, _from, _state) do
-      {:reply, :ok, ports}
-    end
-
-    # Public API
-    def enumerate, do: GenServer.call(__MODULE__, :enumerate)
-    def set_ports(ports), do: GenServer.call(__MODULE__, {:set_ports, ports})
-  end
-
-  # This GenServer manages the socat process for the test
-  defmodule SocatManager do
-    use GenServer
-
-    def start_link(ports) do
-      GenServer.start_link(__MODULE__, ports, name: __MODULE__)
-    end
-
-    def init(ports) do
-      path = System.find_executable("socat") || exit("socat executable not found!")
-      args = ["-d", "pty,rawer,echo=0,link=#{ports.dev}", "pty,rawer,echo=0,link=#{ports.mock}"]
-      socat_port = Port.open({:spawn_executable, path}, [{:args, args}, :binary])
-      :ok = wait_for_files([ports.dev, ports.mock])
-      {:ok, %{socat_port: socat_port, ports: ports}}
-    end
-
-    def terminate(_reason, state) do
-      Port.close(state.socat_port)
-      File.rm(state.ports.dev)
-      File.rm(state.ports.mock)
-      :ok
-    end
-
-    defp wait_for_files(files, timeout_ms \\ 1000) do
-      step_interval = 50
-      max_attempts = div(timeout_ms, step_interval)
-
-      Enum.reduce_while(1..max_attempts, nil, fn _, _ ->
-        if Enum.all?(files, &File.exists?/1) do
-          {:halt, :ok}
-        else
-          Process.sleep(step_interval)
-          {:cont, nil}
-        end
-      end)
-    end
-  end
-
   setup do
-    # Configure the environment for the test *before* starting any processes
     Application.put_env(:lora, :scan_on_startup, false)
-    Application.put_env(:lora, :uart_module, MockUART)
+    Application.put_env(:lora, :uart_module, LoraTest.MockUART)
 
-    # Start the mock UART server
-    start_supervised!(MockUART)
+    start_supervised!(LoraTest.MockUART)
 
-    # Create a pseudo-terminal for the worker to connect to
     ports = %{dev: "/tmp/lora-scanner-dev", mock: "/tmp/lora-scanner-mock"}
-    start_supervised!({SocatManager, ports})
+    start_supervised!({LoraTest.MockLora, ports: ports})
 
-    # Start a supervisor with the DeviceScanner under the test's supervision tree.
     spec = %{
       id: Lora.Supervisor,
       start:
         {Supervisor, :start_link,
          [[Lora.DeviceScanner], [strategy: :one_for_one, name: Lora.Supervisor]]}
     }
+
     start_supervised!(spec)
 
     on_exit(fn ->
-      # Clean up application environment
       Application.delete_env(:lora, :scan_on_startup)
       Application.delete_env(:lora, :uart_module)
     end)
@@ -291,35 +238,18 @@ defmodule LoraTest.DeviceScannerTest do
   end
 
   test "starts a worker for a newly discovered device", %{dev_port: dev_port} do
-    # Initially, only the DeviceScanner should be running
     assert Supervisor.which_children(Lora.Supervisor) |> length() == 1
 
-    # "Connect" a new device by updating the mock's state synchronously
-    :ok = LoraTest.DeviceScannerTest.MockUART.set_ports(%{dev_port => %{description: "fake"}})
+    :ok = LoraTest.MockUART.set_ports(%{dev_port => %{description: "fake"}})
 
-    # Manually trigger a scan
     scanner = Process.whereis(Lora.DeviceScanner)
     assert scanner
     send(scanner, :scan_for_devices)
 
-    # Poll until the child is started or we time out
-    assert poll_for_child(dev_port)
+    assert poll_for_child(Lora.Supervisor, dev_port)
 
-    # Final assertions
     children = Supervisor.which_children(Lora.Supervisor)
     assert length(children) == 2
     assert Enum.any?(children, fn {id, _, _, _} -> id == dev_port end)
-  end
-
-  defp poll_for_child(id, retries \\ 10)
-  defp poll_for_child(_id, 0), do: false
-  defp poll_for_child(id, retries) do
-    children = Supervisor.which_children(Lora.Supervisor)
-    if Enum.any?(children, fn {child_id, _, _, _} -> child_id == id end) do
-      true
-    else
-      Process.sleep(100)
-      poll_for_child(id, retries - 1)
-    end
   end
 end

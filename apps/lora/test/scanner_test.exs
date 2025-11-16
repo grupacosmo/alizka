@@ -111,4 +111,17 @@ defmodule LoraTest.DeviceScannerTest do
     assert_receive {:DOWN, ^mref, :process, ^worker_pid, _}, 5000
     assert Supervisor.count_children(Lora.Supervisor) |> Map.get(:active) == 1
   end
+
+  test "scanner handles worker start failure" do
+    LoraTest.MockUART.set_ports(%{})
+    assert Supervisor.count_children(Lora.Supervisor) |> Map.get(:active) == 1
+
+    LoraTest.MockUART.set_ports(%{"/tmp/non_existent_port" => %{description: "fake"}})
+
+    scanner = Process.whereis(Lora.DeviceScanner)
+    assert scanner
+    send(scanner, :scan_for_devices)
+    Process.sleep(100)
+    assert Supervisor.count_children(Lora.Supervisor) |> Map.get(:active) == 1
+  end
 end

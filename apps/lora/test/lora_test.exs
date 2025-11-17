@@ -3,12 +3,9 @@ defmodule LoraTest.WorkerTest do
   use ExUnit.Case, async: false
 
   setup do
-    # Define the port names for a single mock device
-    ports = %{
-      dev: "/tmp/lora-dev",
-      mock: "/tmp/lora-mock"
-    }
-
+    dev_path = "/tmp/lora-dev-#{System.unique_integer([:positive])}"
+    mock_path = "/tmp/lora-mock-#{System.unique_integer([:positive])}"
+    ports = %{dev: dev_path, mock: mock_path}
     {:ok, mock_pid} = LoraTest.MockLora.start_link(ports: ports)
 
     on_exit(fn ->
@@ -23,7 +20,7 @@ defmodule LoraTest.WorkerTest do
     {:ok, %{dev_port: ports.dev, mock_port: ports.mock, mock_pid: mock_pid}}
   end
 
-  test "Setup communications test", %{dev_port: dev_port} do
+  test "Setup communications", %{dev_port: dev_port} do
     {:ok, pid} = Lora.Worker.start_link({dev_port, :rcv})
     Process.sleep(1)
 
@@ -35,7 +32,7 @@ defmodule LoraTest.WorkerTest do
            ]
   end
 
-  test "counted messages test", %{dev_port: dev_port, mock_pid: mock_pid} do
+  test "counted messages", %{dev_port: dev_port, mock_pid: mock_pid} do
     {:ok, pid} = Lora.Worker.start_link({dev_port, :rcv})
     Process.sleep(1)
     Lora.Worker.get_msgs(pid)
@@ -57,7 +54,7 @@ defmodule LoraTest.WorkerTest do
            ]
   end
 
-  test "continuous messages test", %{dev_port: dev_port, mock_pid: mock_pid} do
+  test "continuous messages", %{dev_port: dev_port, mock_pid: mock_pid} do
     {:ok, pid} = Lora.Worker.start_link({dev_port, :rcv})
     Process.sleep(1)
     Lora.Worker.get_msgs(pid)

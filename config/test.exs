@@ -17,4 +17,7 @@ config :lora,
   ]
 
 config :logger,
-  level: :debug
+  level: :error,
+  compile_time_purge_matching: [
+    [level_lower_than: :warning]
+  ]

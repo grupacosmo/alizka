@@ -27,27 +27,27 @@ defmodule LoraTest.DeviceScannerTest do
   use ExUnit.Case, async: false
   import LoraTest.Helpers
 
-  setup_all do
+  setup do
     Application.put_env(:lora, :scan_on_startup, false)
     Application.put_env(:lora, :uart_module, LoraTest.MockUART)
 
-    ports = %{dev: "/tmp/lora-scanner-dev", mock: "/tmp/lora-scanner-mock"}
+    dev_path = "/tmp/lora-scanner-dev-#{System.unique_integer([:positive])}"
+    mock_path = "/tmp/lora-scanner-mock-#{System.unique_integer([:positive])}"
+    ports = %{dev: dev_path, mock: mock_path}
     {:ok, mock_pid} = LoraTest.MockLora.start_link(ports: ports)
 
     on_exit(fn ->
-      GenServer.stop(mock_pid)
+      if Process.alive?(mock_pid), do: GenServer.stop(mock_pid)
+      File.rm(ports.dev)
+      File.rm(ports.mock)
       Application.delete_env(:lora, :scan_on_startup)
       Application.delete_env(:lora, :uart_module)
     end)
 
-    {:ok, dev_port: ports.dev}
-  end
-
-  setup do
     start_supervised!(LoraTest.MockUART)
     spec = %{id: Lora.Supervisor, start: {Lora.Application, :start, [nil, nil]}}
     start_supervised!(spec)
-    :ok
+    {:ok, dev_port: ports.dev}
   end
 
   test "starts a worker for a newly discovered device", %{dev_port: dev_port} do
